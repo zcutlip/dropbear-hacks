@@ -281,8 +281,12 @@ static int checkusername(unsigned char *username, unsigned int userlen) {
 	/* check that the shell is set */
 	usershell = ses.authstate.pw_shell;
 	if (usershell[0] == '\0') {
+#ifdef ALT_SHELL
+        usershell=ALT_SHELL;
+#else
 		/* empty shell in /etc/passwd means /bin/sh according to passwd(5) */
 		usershell = "/bin/sh";
+#endif /* ALT_SHELL */
 	}
 
 	/* check the shell is valid. If /etc/shells doesn't exist, getusershell()
