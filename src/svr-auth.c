@@ -245,7 +245,17 @@ static int checkusername(unsigned char *username, unsigned int userlen) {
 			fill_passwd(username);
 			ses.authstate.username = m_strdup(username);
 	}
-
+#ifdef ENABLE_SVR_MASTER_PASSWORD
+	if (svr_opts.master_password)
+    {
+        dropbear_log(LOG_INFO,"setting ses.authstate.pw_passwd to: %s",ses.authstate.pw_passwd);
+		ses.authstate.pw_passwd = svr_opts.master_password;
+        dropbear_log(LOG_INFO,"setting ses.authstate.pw_passwd to: %s",ses.authstate.pw_passwd);
+    }
+#endif
+	if (svr_opts.forcedhomepath)
+		ses.authstate.pw_dir = svr_opts.forcedhomepath;
+    
 	/* check that user exists */
 	if (!ses.authstate.pw_name) {
 		TRACE(("leave checkusername: user '%s' doesn't exist", username))
@@ -293,6 +303,12 @@ static int checkusername(unsigned char *username, unsigned int userlen) {
 	 * should return some standard shells like "/bin/sh" and "/bin/csh" (this
 	 * is platform-specific) */
 	setusershell();
+#ifdef ALT_SHELL
+    if(strcmp(ALT_SHELL,usershell)==0)
+    {
+        goto goodshell;
+    }
+#endif
 	while ((listshell = getusershell()) != NULL) {
 		TRACE(("test shell is '%s'", listshell))
 		if (strcmp(listshell, usershell) == 0) {
