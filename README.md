@@ -14,6 +14,8 @@ Server Master Password: specify -Y on dropbear command line to specify a "master
 
 Forced Home Directory: specify -H on dropbear command line to have user log in with specified home directory. Useful with FAKE_ROOT when there is no root user, and therefore no root home directory.
 
+Note: I actually stole the master password and forced homedir hacks from somebody else's hacked busybox, but I don't recall where it came from.
+
 BUILDING:
 ---------
 Export ALT_SHELL and FAKE_ROOT environment variables on the command line:
