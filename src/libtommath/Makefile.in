@@ -173,6 +173,9 @@ clean:
 	-cd etc && MAKE=${MAKE} ${MAKE} clean
 	-cd pics && MAKE=${MAKE} ${MAKE} clean
 
+distclean: clean
+	-rm -f Makefile
+
 #zipup the project (take that!)
 no_oops: clean
 	cd .. ; cvs commit 

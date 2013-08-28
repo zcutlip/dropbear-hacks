@@ -195,8 +195,14 @@ $(LTM): options.h
 ltc-clean:
 	cd libtomcrypt && $(MAKE) clean
 
+ltc-distclean:
+	cd libtomcrypt && $(MAKE) distclean
+
 ltm-clean:
 	cd libtommath && $(MAKE) clean
+
+ltm-distclean:
+	cd libtommath && $(MAKE) distclean
 
 sizes: dropbear
 	objdump -t dropbear|grep ".text"|cut -d "." -f 2|sort -rn
@@ -207,9 +213,11 @@ thisclean:
 	-rm -f dropbear dbclient dropbearkey dropbearconvert scp scp-progress \
 			dropbearmulti *.o *.da *.bb *.bbg *.prof 
 
-distclean: clean tidy
+distclean: ltc-distclean ltm-distclean thisclean tidy
 	-rm -f config.h
 	-rm -f Makefile
+	-rm -f config.status
+	-rm -f config.log
 
 tidy:
 	-rm -f *~ *.gcov */*~

@@ -265,6 +265,9 @@ clean:
 	-rm -f $(OBJECTS)
 	-rm -f libtomcrypt.a
 
+distclean: clean
+	-rm -f Makefile
+
 #build the doxy files (requires Doxygen, tetex and patience)
 doxy:
 	doxygen
