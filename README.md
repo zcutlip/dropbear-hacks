@@ -7,8 +7,11 @@ Further is the problem that, in some cases, you want the embedded device to run 
 HACKS:
 -------
 FAKE_ROOT: #define this to force a fake "root" uid resolution even if the target system can't resolve usernames.
+
 ALT_SHELL: #define this to have fake root user log in with an alternate shell rather than /bin/sh
+
 Server Master Password: specify -Y on dropbear command line to specify a "master" password to authenticate with. Useful with FAKE_ROOT when there is no root user, and therefore no root password.
+
 Forced Home Directory: specify -H on dropbear command line to have user log in with specified home directory. Useful with FAKE_ROOT when there is no root user, and therefore no root home directory.
 
 BUILDING:
