@@ -455,9 +455,11 @@ struct passwd *get_fake_pwnam(const char *username)
 {
     static struct passwd *pw=NULL;
     static struct passwd *ret;
-    if((NULL == username) || strcmp(username,"root")==0)
+    TRACE(("Enter get_fake_pwnam"))
+    if((NULL == username) || strcmp(username,"root")!=0)
     {
         ret=NULL;
+        TRACE(("Leave get_fake_pwnam. username is not root"))
         goto end;
     }
     if(!pw)
@@ -485,6 +487,7 @@ struct passwd *get_fake_pwnam(const char *username)
     pw->pw_shell=NULL;
 #endif /* ALT_SHELL */
     ret=pw;
+    TRACE(("Leave get_fake_pwnam. Success."))
 end:
     return ret;
 }
@@ -492,7 +495,7 @@ end:
 
 void fill_passwd(const char* username) {
 	struct passwd *pw = NULL;
-
+    TRACE(("Enter fill_passwd"))
 	if (ses.authstate.pw_name)
 		m_free(ses.authstate.pw_name);
 	if (ses.authstate.pw_dir)
@@ -512,7 +515,7 @@ void fill_passwd(const char* username) {
 #endif /* FAKE_ROOT */
     
 	if (!pw) {
-        
+        TRACE(("Leave fill_passwd. pw is NULL."))
 		return;
 
 	}
