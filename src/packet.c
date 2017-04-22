@@ -30,19 +30,24 @@
 #include "algo.h"
 #include "buffer.h"
 #include "kex.h"
-#include "random.h"
+#include "dbrandom.h"
 #include "service.h"
 #include "auth.h"
 #include "channel.h"
+#include "netio.h"
 
-static int read_packet_init();
+static int read_packet_init(void);
 static void make_mac(unsigned int seqno, const struct key_context_directional * key_state,
 		buffer * clear_buf, unsigned int clear_len, 
 		unsigned char *output_mac);
-static int checkmac();
+static int checkmac(void);
 
-#define ZLIB_COMPRESS_INCR 100
-#define ZLIB_DECOMPRESS_INCR 100
+/* For exact details see http://www.zlib.net/zlib_tech.html
+ * 5 bytes per 16kB block, plus 6 bytes for the stream.
+ * We might allocate 5 unnecessary bytes here if it's an
+ * exact multiple. */
+#define ZLIB_COMPRESS_EXPANSION (((RECV_MAX_PAYLOAD_LEN/16384)+1)*5 + 6)
+#define ZLIB_DECOMPRESS_INCR 1024
 #ifndef DISABLE_ZLIB
 static buffer* buf_decompress(buffer* buf, unsigned int len);
 static void buf_compress(buffer * dest, buffer * src, unsigned int len);
@@ -51,66 +56,44 @@ static void buf_compress(buffer * dest, buffer * src, unsigned int len);
 /* non-blocking function writing out a current encrypted packet */
 void write_packet() {
 
-	int len, written;
-	buffer * writebuf = NULL;
-	time_t now;
-	unsigned packet_type;
-	int all_ignore = 1;
+	ssize_t written;
 #ifdef HAVE_WRITEV
-	struct iovec *iov = NULL;
-	int i;
-	struct Link *l;
+	/* 50 is somewhat arbitrary */
+	unsigned int iov_count = 50;
+	struct iovec iov[50];
+#else
+	int len;
+	buffer* writebuf;
+	int packet_type;
 #endif
 	
 	TRACE2(("enter write_packet"))
 	dropbear_assert(!isempty(&ses.writequeue));
 
-#ifdef HAVE_WRITEV
-	iov = m_malloc(sizeof(*iov) * ses.writequeue.count);
-	for (l = ses.writequeue.head, i = 0; l; l = l->link, i++)
-	{
-		writebuf = (buffer*)l->item;
-		packet_type = writebuf->data[writebuf->len-1];
-		len = writebuf->len - 1 - writebuf->pos;
-		dropbear_assert(len > 0);
-		all_ignore &= (packet_type == SSH_MSG_IGNORE);
-		TRACE2(("write_packet writev #%d  type %d len %d/%d", i, packet_type,
-				len, writebuf->len-1))
-		iov[i].iov_base = buf_getptr(writebuf, len);
-		iov[i].iov_len = len;
-	}
-	written = writev(ses.sock_out, iov, ses.writequeue.count);
+#if defined(HAVE_WRITEV) && (defined(IOV_MAX) || defined(UIO_MAXIOV))
+
+	packet_queue_to_iovec(&ses.writequeue, iov, &iov_count);
+	/* This may return EAGAIN. The main loop sometimes
+	calls write_packet() without bothering to test with select() since
+	it's likely to be necessary */
+	written = writev(ses.sock_out, iov, iov_count);
 	if (written < 0) {
-		if (errno == EINTR) {
-			m_free(iov);
-			TRACE2(("leave writepacket: EINTR"))
+		if (errno == EINTR || errno == EAGAIN) {
+			TRACE2(("leave write_packet: EINTR"))
 			return;
 		} else {
-			dropbear_exit("Error writing");
+			dropbear_exit("Error writing: %s", strerror(errno));
 		}
-	} 
+	}
+
+	packet_queue_consume(&ses.writequeue, written);
+	ses.writequeue_len -= written;
 
 	if (written == 0) {
 		ses.remoteclosed();
 	}
 
-	while (written > 0) {
-		writebuf = (buffer*)examine(&ses.writequeue);
-		len = writebuf->len - 1 - writebuf->pos;
-		if (len > written) {
-			// partial buffer write
-			buf_incrpos(writebuf, written);
-			written = 0;
-		} else {
-			written -= len;
-			dequeue(&ses.writequeue);
-			buf_free(writebuf);
-		}
-	}
-
-	m_free(iov);
-
-#else
+#else /* No writev () */
 	/* Get the next buffer in the queue of encrypted packets to write*/
 	writebuf = (buffer*)examine(&ses.writequeue);
 
@@ -118,23 +101,26 @@ void write_packet() {
 	 * a cleartext packet_type indicator */
 	packet_type = writebuf->data[writebuf->len-1];
 	len = writebuf->len - 1 - writebuf->pos;
+	TRACE2(("write_packet type %d len %d/%d", packet_type,
+			len, writebuf->len-1))
 	dropbear_assert(len > 0);
 	/* Try to write as much as possible */
 	written = write(ses.sock_out, buf_getptr(writebuf, len), len);
 
 	if (written < 0) {
-		if (errno == EINTR) {
+		if (errno == EINTR || errno == EAGAIN) {
 			TRACE2(("leave writepacket: EINTR"))
 			return;
 		} else {
-			dropbear_exit("Error writing");
+			dropbear_exit("Error writing: %s", strerror(errno));
 		}
 	} 
-	all_ignore = (packet_type == SSH_MSG_IGNORE);
 
 	if (written == 0) {
 		ses.remoteclosed();
 	}
+
+	ses.writequeue_len -= written;
 
 	if (written == len) {
 		/* We've finished with the packet, free it */
@@ -145,14 +131,7 @@ void write_packet() {
 		/* More packet left to write, leave it in the queue for later */
 		buf_incrpos(writebuf, written);
 	}
-
-#endif
-	now = time(NULL);
-	ses.last_trx_packet_time = now;
-
-	if (!all_ignore) {
-		ses.last_packet_time = now;
-	}
+#endif /* writev */
 
 	TRACE2(("leave write_packet"))
 }
@@ -250,7 +229,7 @@ static int read_packet_init() {
 		ses.remoteclosed();
 	}
 	if (slen < 0) {
-		if (errno == EINTR) {
+		if (errno == EINTR || errno == EAGAIN) {
 			TRACE2(("leave read_packet_init: EINTR"))
 			return DROPBEAR_FAILURE;
 		}
@@ -275,18 +254,18 @@ static int read_packet_init() {
 	}
 	len = buf_getint(ses.readbuf) + 4 + macsize;
 
-	TRACE2(("packet size is %d, block %d mac %d", len, blocksize, macsize))
+	TRACE2(("packet size is %u, block %u mac %u", len, blocksize, macsize))
 
 
 	/* check packet length */
 	if ((len > RECV_MAX_PACKET_LEN) ||
 		(len < MIN_PACKET_LEN + macsize) ||
 		((len - macsize) % blocksize != 0)) {
-		dropbear_exit("Integrity error (bad packet size %d)", len);
+		dropbear_exit("Integrity error (bad packet size %u)", len);
 	}
 
 	if (len > ses.readbuf->size) {
-		buf_resize(ses.readbuf, len);		
+		ses.readbuf = buf_resize(ses.readbuf, len);		
 	}
 	buf_setlen(ses.readbuf, len);
 	buf_setpos(ses.readbuf, blocksize);
@@ -333,8 +312,8 @@ void decrypt_packet() {
 	/* payload length */
 	/* - 4 - 1 is for LEN and PADLEN values */
 	len = ses.readbuf->len - padlen - 4 - 1 - macsize;
-	if ((len > RECV_MAX_PAYLOAD_LEN) || (len < 1)) {
-		dropbear_exit("Bad packet size %d", len);
+	if ((len > RECV_MAX_PAYLOAD_LEN+ZLIB_COMPRESS_EXPANSION) || (len < 1)) {
+		dropbear_exit("Bad packet size %u", len);
 	}
 
 	buf_setpos(ses.readbuf, PACKET_PAYLOAD_OFF);
@@ -343,18 +322,21 @@ void decrypt_packet() {
 	if (is_compress_recv()) {
 		/* decompress */
 		ses.payload = buf_decompress(ses.readbuf, len);
+		buf_setpos(ses.payload, 0);
+		ses.payload_beginning = 0;
+		buf_free(ses.readbuf);
 	} else 
 #endif
 	{
+		ses.payload = ses.readbuf;
+		ses.payload_beginning = ses.payload->pos;
+		buf_setlen(ses.payload, ses.payload->pos + len);
 		/* copy payload */
-		ses.payload = buf_new(len);
-		memcpy(ses.payload->data, buf_getptr(ses.readbuf, len), len);
-		buf_incrlen(ses.payload, len);
+		//ses.payload = buf_new(len);
+		//memcpy(ses.payload->data, buf_getptr(ses.readbuf, len), len);
+		//buf_incrlen(ses.payload, len);
 	}
-
-	buf_free(ses.readbuf);
 	ses.readbuf = NULL;
-	buf_setpos(ses.payload, 0);
 
 	ses.recvseq++;
 
@@ -376,7 +358,7 @@ static int checkmac() {
 
 	/* compare the hash */
 	buf_setpos(ses.readbuf, contents_len);
-	if (memcmp(mac_bytes, buf_getptr(ses.readbuf, mac_size), mac_size) != 0) {
+	if (constant_time_memcmp(mac_bytes, buf_getptr(ses.readbuf, mac_size), mac_size) != 0) {
 		return DROPBEAR_FAILURE;
 	} else {
 		return DROPBEAR_SUCCESS;
@@ -420,7 +402,14 @@ static buffer* buf_decompress(buffer* buf, unsigned int len) {
 		}
 
 		if (zstream->avail_out == 0) {
-			buf_resize(ret, ret->size + ZLIB_DECOMPRESS_INCR);
+			int new_size = 0;
+			if (ret->size >= RECV_MAX_PAYLOAD_LEN) {
+				/* Already been increased as large as it can go,
+				 * yet didn't finish up the decompression */
+				dropbear_exit("bad packet, oversized decompressed");
+			}
+			new_size = MIN(RECV_MAX_PAYLOAD_LEN, ret->size + ZLIB_DECOMPRESS_INCR);
+			ret = buf_resize(ret, new_size);
 		}
 	}
 }
@@ -492,6 +481,8 @@ void encrypt_packet() {
 	unsigned char packet_type;
 	unsigned int len, encrypt_buf_size;
 	unsigned char mac_bytes[MAX_MAC_LEN];
+
+	time_t now;
 	
 	TRACE2(("enter encrypt_packet()"))
 
@@ -521,7 +512,7 @@ void encrypt_packet() {
 				+ mac_size
 #ifndef DISABLE_ZLIB
 	/* some extra in case 'compression' makes it larger */
-				+ ZLIB_COMPRESS_INCR
+				+ ZLIB_COMPRESS_EXPANSION
 #endif
 	/* and an extra cleartext (stripped before transmission) byte for the
 	 * packet type */
@@ -534,14 +525,7 @@ void encrypt_packet() {
 #ifndef DISABLE_ZLIB
 	/* compression */
 	if (is_compress_trans()) {
-		int compress_delta;
 		buf_compress(writebuf, ses.writepayload, ses.writepayload->len);
-		compress_delta = (writebuf->len - PACKET_PAYLOAD_OFF) - ses.writepayload->len;
-
-		/* Handle the case where 'compress' increased the size. */
-		if (compress_delta > ZLIB_COMPRESS_INCR) {
-			buf_resize(writebuf, writebuf->size + compress_delta);
-		}
 	} else
 #endif
 	{
@@ -592,21 +576,40 @@ void encrypt_packet() {
 	}
 	buf_incrpos(writebuf, len);
 
-    /* stick the MAC on it */
-    buf_putbytes(writebuf, mac_bytes, mac_size);
+	/* stick the MAC on it */
+	buf_putbytes(writebuf, mac_bytes, mac_size);
 
+	/* Update counts */
+	ses.kexstate.datatrans += writebuf->len;
+
+	writebuf_enqueue(writebuf, packet_type);
+
+	/* Update counts */
+	ses.transseq++;
+
+	now = monotonic_now();
+	ses.last_packet_time_any_sent = now;
+	/* idle timeout shouldn't be affected by responses to keepalives.
+	send_msg_keepalive() itself also does tricks with 
+	ses.last_packet_idle_time - read that if modifying this code */
+	if (packet_type != SSH_MSG_REQUEST_FAILURE
+		&& packet_type != SSH_MSG_UNIMPLEMENTED
+		&& packet_type != SSH_MSG_IGNORE) {
+		ses.last_packet_time_idle = now;
+
+	}
+
+	TRACE2(("leave encrypt_packet()"))
+}
+
+void writebuf_enqueue(buffer * writebuf, unsigned char packet_type) {
 	/* The last byte of the buffer stores the cleartext packet_type. It is not
 	 * transmitted but is used for transmit timeout purposes */
 	buf_putbyte(writebuf, packet_type);
 	/* enqueue the packet for sending. It will get freed after transmission. */
 	buf_setpos(writebuf, 0);
 	enqueue(&ses.writequeue, (void*)writebuf);
-
-	/* Update counts */
-	ses.kexstate.datatrans += writebuf->len;
-	ses.transseq++;
-
-	TRACE2(("leave encrypt_packet()"))
+	ses.writequeue_len += writebuf->len-1;
 }
 
 
@@ -642,7 +645,7 @@ static void make_mac(unsigned int seqno, const struct key_context_directional * 
 			dropbear_exit("HMAC error");
 		}
 	
-        bufsize = MAX_MAC_LEN;
+		bufsize = MAX_MAC_LEN;
 		if (hmac_done(&hmac, output_mac, &bufsize) != CRYPT_OK) {
 			dropbear_exit("HMAC error");
 		}
@@ -652,7 +655,8 @@ static void make_mac(unsigned int seqno, const struct key_context_directional * 
 
 #ifndef DISABLE_ZLIB
 /* compresses len bytes from src, outputting to dest (starting from the
- * respective current positions. */
+ * respective current positions. dest must have sufficient space,
+ * len+ZLIB_COMPRESS_EXPANSION */
 static void buf_compress(buffer * dest, buffer * src, unsigned int len) {
 
 	unsigned int endpos = src->pos + len;
@@ -660,38 +664,28 @@ static void buf_compress(buffer * dest, buffer * src, unsigned int len) {
 
 	TRACE2(("enter buf_compress"))
 
-	while (1) {
+	dropbear_assert(dest->size - dest->pos >= len+ZLIB_COMPRESS_EXPANSION);
 
-		ses.keys->trans.zstream->avail_in = endpos - src->pos;
-		ses.keys->trans.zstream->next_in = 
-			buf_getptr(src, ses.keys->trans.zstream->avail_in);
+	ses.keys->trans.zstream->avail_in = endpos - src->pos;
+	ses.keys->trans.zstream->next_in = 
+		buf_getptr(src, ses.keys->trans.zstream->avail_in);
 
-		ses.keys->trans.zstream->avail_out = dest->size - dest->pos;
-		ses.keys->trans.zstream->next_out =
-			buf_getwriteptr(dest, ses.keys->trans.zstream->avail_out);
+	ses.keys->trans.zstream->avail_out = dest->size - dest->pos;
+	ses.keys->trans.zstream->next_out =
+		buf_getwriteptr(dest, ses.keys->trans.zstream->avail_out);
 
-		result = deflate(ses.keys->trans.zstream, Z_SYNC_FLUSH);
+	result = deflate(ses.keys->trans.zstream, Z_SYNC_FLUSH);
 
-		buf_setpos(src, endpos - ses.keys->trans.zstream->avail_in);
-		buf_setlen(dest, dest->size - ses.keys->trans.zstream->avail_out);
-		buf_setpos(dest, dest->len);
+	buf_setpos(src, endpos - ses.keys->trans.zstream->avail_in);
+	buf_setlen(dest, dest->size - ses.keys->trans.zstream->avail_out);
+	buf_setpos(dest, dest->len);
 
-		if (result != Z_OK) {
-			dropbear_exit("zlib error");
-		}
-
-		if (ses.keys->trans.zstream->avail_in == 0) {
-			break;
-		}
-
-		dropbear_assert(ses.keys->trans.zstream->avail_out == 0);
-
-		/* the buffer has been filled, we must extend. This only happens in
-		 * unusual circumstances where the data grows in size after deflate(),
-		 * but it is possible */
-		buf_resize(dest, dest->size + ZLIB_COMPRESS_INCR);
-
+	if (result != Z_OK) {
+		dropbear_exit("zlib error");
 	}
+
+	/* fails if destination buffer wasn't large enough */
+	dropbear_assert(ses.keys->trans.zstream->avail_in == 0);
 	TRACE2(("leave buf_compress"))
 }
 #endif

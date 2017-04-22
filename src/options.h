@@ -2,13 +2,13 @@
  * Copyright (c) 2002,2003 Matt Johnston
  * All rights reserved. See LICENSE for the license. */
 
-#ifndef _OPTIONS_H_
-#define _OPTIONS_H_
+#ifndef DROPBEAR_OPTIONS_H_
+#define DROPBEAR_OPTIONS_H_
 
-/******************************************************************
- * Define compile-time options below - the "#ifndef DROPBEAR_XXX .... #endif"
- * parts are to allow for commandline -DDROPBEAR_XXX options etc.
- ******************************************************************/
+/* Define compile-time options below - the "#ifndef DROPBEAR_XXX .... #endif"
+ * parts are to allow for commandline -DDROPBEAR_XXX options etc. */
+
+/* IMPORTANT: Many options will require "make clean" after changes */
 
 #ifndef DROPBEAR_DEFPORT
 #define DROPBEAR_DEFPORT "22"
@@ -25,6 +25,9 @@
 #endif
 #ifndef RSA_PRIV_FILENAME
 #define RSA_PRIV_FILENAME "/etc/dropbear/dropbear_rsa_host_key"
+#endif
+#ifndef ECDSA_PRIV_FILENAME
+#define ECDSA_PRIV_FILENAME "/etc/dropbear/dropbear_ecdsa_host_key"
 #endif
 
 /* Set NON_INETD_MODE if you require daemon functionality (ie Dropbear listens
@@ -49,7 +52,7 @@
 several kB in binary size however will make the symmetrical ciphers and hashes
 slower, perhaps by 50%. Recommended for small systems that aren't doing
 much traffic. */
-/*#define DROPBEAR_SMALL_CODE*/
+#define DROPBEAR_SMALL_CODE
 
 /* Enable X11 Forwarding - server only */
 #define ENABLE_X11FWD
@@ -95,10 +98,19 @@ much traffic. */
 #define DROPBEAR_TWOFISH256
 #define DROPBEAR_TWOFISH128
 
+/* Enable CBC mode for ciphers. This has security issues though
+ * is the most compatible with older SSH implementations */
+#define DROPBEAR_ENABLE_CBC_MODE
+
 /* Enable "Counter Mode" for ciphers. This is more secure than normal
- * CBC mode against certain attacks. This adds around 1kB to binary 
- * size and is recommended for most cases */
+ * CBC mode against certain attacks. It is recommended for security
+ * and forwards compatibility */
 #define DROPBEAR_ENABLE_CTR_MODE
+
+/* Twofish counter mode is disabled by default because it 
+has not been tested for interoperability with other SSH implementations.
+If you test it please contact the Dropbear author */
+/* #define DROPBEAR_TWOFISH_CTR */
 
 /* You can compile with no encryption if you want. In some circumstances
  * this could be safe security-wise, though make sure you know what
@@ -120,13 +132,13 @@ much traffic. */
  * which are not the standard form. */
 #define DROPBEAR_SHA1_HMAC
 #define DROPBEAR_SHA1_96_HMAC
-/*#define DROPBEAR_SHA2_256_HMAC*/
-/*#define DROPBEAR_SHA2_512_HMAC*/
+#define DROPBEAR_SHA2_256_HMAC
+#define DROPBEAR_SHA2_512_HMAC
 #define DROPBEAR_MD5_HMAC
 
 /* You can also disable integrity. Don't bother disabling this if you're
  * still using a cipher, it's relatively cheap. If you disable this it's dead
- * simple to run arbitrary commands on the remote host. Beware. */
+ * simple for an attacker to run arbitrary commands on the remote host. Beware. */
 /* #define DROPBEAR_NONE_INTEGRITY */
 
 /* Hostkey/public key algorithms - at least one required, these are used
@@ -135,11 +147,31 @@ much traffic. */
  * SSH2 RFC Draft requires dss, recommends rsa */
 #define DROPBEAR_RSA
 #define DROPBEAR_DSS
+/* ECDSA is significantly faster than RSA or DSS. Compiling in ECC
+ * code (either ECDSA or ECDH) increases binary size - around 30kB
+ * on x86-64 */
+#define DROPBEAR_ECDSA
 
-/* RSA can be vulnerable to timing attacks which use the time required for
- * signing to guess the private key. Blinding avoids this attack, though makes
- * signing operations slightly slower. */
-#define RSA_BLINDING
+/* Generate hostkeys as-needed when the first connection using that key type occurs.
+   This avoids the need to otherwise run "dropbearkey" and avoids some problems
+   with badly seeded /dev/urandom when systems first boot.
+   This also requires a runtime flag "-R". This adds ~4kB to binary size (or hardly 
+   anything if dropbearkey is linked in a "dropbearmulti" binary) */
+#define DROPBEAR_DELAY_HOSTKEY
+
+/* Enable Curve25519 for key exchange. This is another elliptic
+ * curve method with good security properties. Increases binary size
+ * by ~8kB on x86-64 */
+#define DROPBEAR_CURVE25519
+
+/* Enable elliptic curve Diffie Hellman key exchange, see note about
+ * ECDSA above */
+#define DROPBEAR_ECDH
+
+/* Group14 (2048 bit) is recommended. Group1 is less secure (1024 bit) though
+   is the only option for interoperability with some older SSH programs */
+#define DROPBEAR_DH_GROUP1 1
+#define DROPBEAR_DH_GROUP14 1
 
 /* Control the memory/performance/compression tradeoff for zlib.
  * Set windowBits=8 for least memory usage, see your system's
@@ -152,8 +184,13 @@ much traffic. */
 #define DROPBEAR_ZLIB_WINDOW_BITS 15 
 #endif
 
+/* Server won't allow zlib compression until after authentication. Prevents
+   flaws in the zlib library being unauthenticated exploitable flaws.
+   Some old ssh clients may not support the alternative zlib@openssh.com method */
+#define DROPBEAR_SERVER_DELAY_ZLIB 1
+
 /* Whether to do reverse DNS lookups. */
-//#define DO_HOST_LOOKUP
+/*#define DO_HOST_LOOKUP */
 
 /* Whether to print the message of the day (MOTD). This doesn't add much code
  * size */
@@ -173,10 +210,14 @@ much traffic. */
  * but there's an interface via a PAM module. It won't work for more complex
  * PAM challenge/response.
  * You can't enable both PASSWORD and PAM. */
+
 #define ENABLE_SVR_MASTER_PASSWORD
+/* This requires crypt() */
+#ifdef HAVE_CRYPT
 #define ENABLE_SVR_PASSWORD_AUTH
+#endif
 /* PAM requires ./configure --enable-pam */
-//#define ENABLE_SVR_PAM_AUTH
+/*#define ENABLE_SVR_PAM_AUTH */
 #define ENABLE_SVR_PUBKEY_AUTH
 
 /* Whether to take public key options in 
@@ -185,9 +226,16 @@ much traffic. */
 #define ENABLE_SVR_PUBKEY_OPTIONS
 #endif
 
+/* This requires getpass. */
+#ifdef HAVE_GETPASS
 #define ENABLE_CLI_PASSWORD_AUTH
-#define ENABLE_CLI_PUBKEY_AUTH
 #define ENABLE_CLI_INTERACT_AUTH
+#endif
+#define ENABLE_CLI_PUBKEY_AUTH
+
+/* A default argument for dbclient -i <privatekey>. 
+Homedir is prepended unless path begins with / */
+#define DROPBEAR_DEFAULT_CLI_AUTHKEY ".ssh/id_dropbear"
 
 /* This variable can be used to set a password for client
  * authentication on the commandline. Beware of platforms
@@ -204,12 +252,11 @@ much traffic. */
  * return the password on standard output */
 /*#define ENABLE_CLI_ASKPASS_HELPER*/
 
-/* Send a real auth request first rather than requesting a list of available methods.
- * It saves a network round trip at login but prevents immediate login to
- * accounts with no password, and might be rejected by some strict servers (none
- * encountered yet) - hence it isn't enabled by default. */
-/* #define CLI_IMMEDIATE_AUTH */
-
+/* Save a network roundtrip by sendng a real auth request immediately after
+ * sending a query for the available methods.  It is at the expense of < 100
+ * bytes of extra network traffic. This is not yet enabled by default since it
+ * could cause problems with non-compliant servers */
+/* #define DROPBEAR_CLI_IMMEDIATE_AUTH */
 
 /* Source for randomness. This must be able to provide hundreds of bytes per SSH
  * connection without blocking. In addition /dev/random is used for seeding
@@ -247,7 +294,7 @@ much traffic. */
 /* The command to invoke for xauth when using X11 forwarding.
  * "-q" for quiet */
 #ifndef XAUTH_COMMAND
-#define XAUTH_COMMAND "/usr/bin/X11/xauth -q"
+#define XAUTH_COMMAND "/usr/bin/xauth -q"
 #endif
 
 /* if you want to enable running an sftp server (such as the one included with
@@ -259,7 +306,7 @@ much traffic. */
 
 /* This is used by the scp binary when used as a client binary. If you're
  * not using the Dropbear client, you'll need to change it */
-#define _PATH_SSH_PROGRAM "/usr/bin/dbclient"
+#define DROPBEAR_PATH_SSH_PROGRAM "/usr/bin/dbclient"
 
 /* Whether to log commands executed by a client. This only logs the 
  * (single) command sent to the server, not what a user did in a 
@@ -291,6 +338,11 @@ much traffic. */
 be overridden at runtime with -K. 0 disables keepalives */
 #define DEFAULT_KEEPALIVE 0
 
+/* If this many KEEPALIVES are sent with no packets received from the
+other side, exit. Not run-time configurable - if you have a need
+for runtime configuration please mail the Dropbear list */
+#define DEFAULT_KEEPALIVE_LIMIT 3
+
 /* Ensure that data is received within IDLE_TIMEOUT seconds. This can
 be overridden at runtime with -I. 0 disables idle timeouts */
 #define DEFAULT_IDLE_TIMEOUT 0
@@ -302,4 +354,4 @@ be overridden at runtime with -I. 0 disables idle timeouts */
  * in sysoptions.h */
 #include "sysoptions.h"
 
-#endif /* _OPTIONS_H_ */
+#endif /* DROPBEAR_OPTIONS_H_ */

@@ -30,6 +30,7 @@
 #include "runopts.h"
 #include "session.h"
 #include "ssh.h"
+#include "netio.h"
 
 #ifdef ENABLE_CLI_REMOTETCPFWD
 static int newtcpforwarded(struct Channel * channel);
@@ -52,11 +53,28 @@ static int cli_localtcp(const char* listenaddr,
 static const struct ChanType cli_chan_tcplocal = {
 	1, /* sepfds */
 	"direct-tcpip",
-	NULL,
+	tcp_prio_inithandler,
 	NULL,
 	NULL,
 	NULL
 };
+#endif
+
+#ifdef ENABLE_CLI_ANYTCPFWD
+static void fwd_failed(const char* format, ...) ATTRIB_PRINTF(1,2);
+static void fwd_failed(const char* format, ...)
+{
+	va_list param;
+	va_start(param, format);
+
+	if (cli_opts.exit_on_fwd_failure) {
+		_dropbear_exit(EXIT_FAILURE, format, param);
+	} else {
+		_dropbear_log(LOG_WARNING, format, param);
+	}
+
+	va_end(param);
+}
 #endif
 
 #ifdef ENABLE_CLI_LOCALTCPFWD
@@ -74,7 +92,7 @@ void setup_localtcp() {
 				fwd->connectaddr,
 				fwd->connectport);
 		if (ret == DROPBEAR_FAILURE) {
-			dropbear_log(LOG_WARNING, "Failed local port forward %s:%d:%s:%d",
+			fwd_failed("Failed local port forward %s:%d:%s:%d",
 					fwd->listenaddr,
 					fwd->listenport,
 					fwd->connectaddr,
@@ -161,9 +179,10 @@ void cli_recv_msg_request_success() {
 		if (!fwd->have_reply) {
 			fwd->have_reply = 1;
 			if (fwd->listenport == 0) {
-				/* The server should let us know which port was allocated if we requestd port 0 */
+				/* The server should let us know which port was allocated if we requested port 0 */
 				int allocport = buf_getint(ses.payload);
 				if (allocport > 0) {
+					fwd->listenport = allocport;
 					dropbear_log(LOG_INFO, "Allocated port %d for remote forward to %s:%d", 
 							allocport, fwd->connectaddr, fwd->connectport);
 				}
@@ -179,7 +198,10 @@ void cli_recv_msg_request_failure() {
 		struct TCPFwdEntry *fwd = (struct TCPFwdEntry*)iter->item;
 		if (!fwd->have_reply) {
 			fwd->have_reply = 1;
-			dropbear_log(LOG_WARNING, "Remote TCP forward request failed (port %d -> %s:%d)", fwd->listenport, fwd->connectaddr, fwd->connectport);
+			fwd_failed("Remote TCP forward request failed (port %d -> %s:%d)",
+					fwd->listenport,
+					fwd->connectaddr,
+					fwd->connectport);
 			return;
 		}
 	}
@@ -193,8 +215,8 @@ void setup_remotetcp() {
 		struct TCPFwdEntry *fwd = (struct TCPFwdEntry*)iter->item;
 		if (!fwd->listenaddr)
 		{
-			// we store the addresses so that we can compare them
-			// when the server sends them back
+			/* we store the addresses so that we can compare them
+			   when the server sends them back */
 			if (opts.listen_fwd_all) {
 				fwd->listenaddr = m_strdup("");
 			} else {
@@ -209,48 +231,52 @@ void setup_remotetcp() {
 
 static int newtcpforwarded(struct Channel * channel) {
 
-    char *origaddr = NULL;
+	char *origaddr = NULL;
 	unsigned int origport;
 	m_list_elem * iter = NULL;
 	struct TCPFwdEntry *fwd;
 	char portstring[NI_MAXSERV];
-	int sock;
 	int err = SSH_OPEN_ADMINISTRATIVELY_PROHIBITED;
 
 	origaddr = buf_getstring(ses.payload, NULL);
 	origport = buf_getint(ses.payload);
 
-	/* Find which port corresponds */
+	/* Find which port corresponds. First try and match address as well as port,
+	in case they want to forward different ports separately ... */
 	for (iter = cli_opts.remotefwds->first; iter; iter = iter->next) {
 		fwd = (struct TCPFwdEntry*)iter->item;
 		if (origport == fwd->listenport
-				&& (strcmp(origaddr, fwd->listenaddr) == 0)) {
+				&& strcmp(origaddr, fwd->listenaddr) == 0) {
 			break;
 		}
 	}
 
+	if (!iter)
+	{
+		/* ... otherwise try to generically match the only forwarded port 
+		without address (also handles ::1 vs 127.0.0.1 vs localhost case).
+		rfc4254 is vague about the definition of "address that was connected" */
+		for (iter = cli_opts.remotefwds->first; iter; iter = iter->next) {
+			fwd = (struct TCPFwdEntry*)iter->item;
+			if (origport == fwd->listenport) {
+				break;
+			}
+		}
+	}
+
+
 	if (iter == NULL) {
 		/* We didn't request forwarding on that port */
-        cleantext(origaddr);
+		cleantext(origaddr);
 		dropbear_log(LOG_INFO, "Server sent unrequested forward from \"%s:%d\"", 
                 origaddr, origport);
 		goto out;
 	}
 	
-	snprintf(portstring, sizeof(portstring), "%d", fwd->connectport);
-	sock = connect_remote(fwd->connectaddr, portstring, 1, NULL);
-	if (sock < 0) {
-		TRACE(("leave newtcpdirect: sock failed"))
-		err = SSH_OPEN_CONNECT_FAILED;
-		goto out;
-	}
+	snprintf(portstring, sizeof(portstring), "%u", fwd->connectport);
+	channel->conn_pending = connect_remote(fwd->connectaddr, portstring, channel_connect_done, channel);
 
-	ses.maxfd = MAX(ses.maxfd, sock);
-
-	/* We don't set readfd, that will get set after the connection's
-	 * progress succeeds */
-	channel->writefd = sock;
-	channel->initconn = 1;
+	channel->prio = DROPBEAR_CHANNEL_PRIO_UNKNOWABLE;
 	
 	err = SSH_OPEN_IN_PROGRESS;
 

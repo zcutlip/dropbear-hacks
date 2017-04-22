@@ -238,7 +238,7 @@ static char **initshells() {
 #ifdef ALT_SHELL
 	const char *okshells[] = { ALT_SHELL,"/bin/sh", "/bin/csh", NULL };
 #else
-	const char *okshells[] = { "/bin/sh", "/bin/csh", NULL };
+	static const char *okshells[] = { "/bin/sh", "/bin/csh", NULL };
 #endif
 	register char **sp, *cp;
 	register FILE *fp;

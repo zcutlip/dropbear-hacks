@@ -41,9 +41,9 @@ static void cli_chansessreq(struct Channel *channel);
 static void send_chansess_pty_req(struct Channel *channel);
 static void send_chansess_shell_req(struct Channel *channel);
 static void cli_escape_handler(struct Channel *channel, unsigned char* buf, int *len);
+static int cli_init_netcat(struct Channel *channel);
 
-
-static void cli_tty_setup();
+static void cli_tty_setup(void);
 
 const struct ChanType clichansess = {
 	0, /* sepfds */
@@ -56,7 +56,7 @@ const struct ChanType clichansess = {
 
 static void cli_chansessreq(struct Channel *channel) {
 
-	unsigned char* type = NULL;
+	char* type = NULL;
 	int wantreply;
 
 	TRACE(("enter cli_chansessreq"))
@@ -71,7 +71,9 @@ static void cli_chansessreq(struct Channel *channel) {
 		TRACE(("got exit-signal, ignoring it"))
 	} else {
 		TRACE(("unknown request '%s'", type))
-		send_msg_channel_failure(channel);
+		if (wantreply) {
+			send_msg_channel_failure(channel);
+		}
 		goto out;
 	}
 		
@@ -88,17 +90,6 @@ static void cli_closechansess(struct Channel *UNUSED(channel)) {
 	if (ses.chancount > 1) {
 		dropbear_log(LOG_INFO, "Waiting for other channels to close...");
 	}
-}
-
-void cli_start_send_channel_request(struct Channel *channel, 
-		unsigned char *type) {
-
-	CHECKCLEARTOWRITE();
-	buf_putbyte(ses.writepayload, SSH_MSG_CHANNEL_REQUEST);
-	buf_putint(ses.writepayload, channel->remotechan);
-
-	buf_putstring(ses.writepayload, type, strlen(type));
-
 }
 
 /* Taken from OpenSSH's sshtty.c:
@@ -281,11 +272,11 @@ void cli_chansess_winchange() {
 
 static void send_chansess_pty_req(struct Channel *channel) {
 
-	unsigned char* term = NULL;
+	char* term = NULL;
 
 	TRACE(("enter send_chansess_pty_req"))
 
-	cli_start_send_channel_request(channel, "pty-req");
+	start_send_channel_request(channel, "pty-req");
 
 	/* Don't want replies */
 	buf_putbyte(ses.writepayload, 0);
@@ -314,7 +305,7 @@ static void send_chansess_pty_req(struct Channel *channel) {
 
 static void send_chansess_shell_req(struct Channel *channel) {
 
-	unsigned char* reqtype = NULL;
+	char* reqtype = NULL;
 
 	TRACE(("enter send_chansess_shell_req"))
 
@@ -328,7 +319,7 @@ static void send_chansess_shell_req(struct Channel *channel) {
 		reqtype = "shell";
 	}
 
-	cli_start_send_channel_request(channel, reqtype);
+	start_send_channel_request(channel, reqtype);
 
 	/* XXX TODO */
 	buf_putbyte(ses.writepayload, 0); /* Don't want replies */
@@ -355,6 +346,11 @@ static int cli_init_stdpipe_sess(struct Channel *channel) {
 	return 0;
 }
 
+static int cli_init_netcat(struct Channel *channel) {
+	channel->prio = DROPBEAR_CHANNEL_PRIO_UNKNOWABLE;
+	return cli_init_stdpipe_sess(channel);
+}
+
 static int cli_initchansess(struct Channel *channel) {
 
 	cli_init_stdpipe_sess(channel);
@@ -367,6 +363,9 @@ static int cli_initchansess(struct Channel *channel) {
 
 	if (cli_opts.wantpty) {
 		send_chansess_pty_req(channel);
+		channel->prio = DROPBEAR_CHANNEL_PRIO_INTERACTIVE;
+	} else {
+		channel->prio = DROPBEAR_CHANNEL_PRIO_BULK;
 	}
 
 	send_chansess_shell_req(channel);
@@ -385,7 +384,7 @@ static int cli_initchansess(struct Channel *channel) {
 static const struct ChanType cli_chan_netcat = {
 	0, /* sepfds */
 	"direct-tcpip",
-	cli_init_stdpipe_sess, /* inithandler */
+	cli_init_netcat, /* inithandler */
 	NULL,
 	NULL,
 	cli_closechansess
@@ -393,9 +392,10 @@ static const struct ChanType cli_chan_netcat = {
 
 void cli_send_netcat_request() {
 
-	const unsigned char* source_host = "127.0.0.1";
+	const char* source_host = "127.0.0.1";
 	const int source_port = 22;
 
+	TRACE(("enter cli_send_netcat_request"))
 	cli_opts.wantpty = 0;
 
 	if (send_msg_channel_open_init(STDIN_FILENO, &cli_chan_netcat) 
@@ -403,7 +403,7 @@ void cli_send_netcat_request() {
 		dropbear_exit("Couldn't open initial channel");
 	}
 
-	buf_putstring(ses.writepayload, cli_opts.netcat_host, 
+	buf_putstring(ses.writepayload, cli_opts.netcat_host,
 			strlen(cli_opts.netcat_host));
 	buf_putint(ses.writepayload, cli_opts.netcat_port);
 
@@ -412,7 +412,7 @@ void cli_send_netcat_request() {
 	buf_putint(ses.writepayload, source_port);
 
 	encrypt_packet();
-	TRACE(("leave cli_send_chansess_request"))
+	TRACE(("leave cli_send_netcat_request"))
 }
 #endif
 
@@ -431,34 +431,33 @@ void cli_send_chansess_request() {
 
 }
 
-// returns 1 if the character should be consumed, 0 to pass through
+/* returns 1 if the character should be consumed, 0 to pass through */
 static int
 do_escape(unsigned char c) {
 	switch (c) {
 		case '.':
 			dropbear_exit("Terminated");
 			return 1;
-			break;
 		case 0x1a:
-			// ctrl-z
+			/* ctrl-z */
 			cli_tty_cleanup();
 			kill(getpid(), SIGTSTP);
-			// after continuation
+			/* after continuation */
 			cli_tty_setup();
 			cli_ses.winchange = 1;
 			return 1;
-			break;
+		default:
+			return 0;
 	}
-	return 0;
 }
 
 static
-void cli_escape_handler(struct Channel *channel, unsigned char* buf, int *len) {
+void cli_escape_handler(struct Channel* UNUSED(channel), unsigned char* buf, int *len) {
 	char c;
 	int skip_char = 0;
 
-	// only handle escape characters if they are read one at a time. simplifies
-	// the code and avoids nasty people putting ~. at the start of a line to paste 
+	/* only handle escape characters if they are read one at a time. simplifies 
+	   the code and avoids nasty people putting ~. at the start of a line to paste  */
 	if (*len != 1) {
 		cli_ses.last_char = 0x0;
 		return;

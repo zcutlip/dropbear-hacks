@@ -29,13 +29,14 @@
 #include "dbutil.h"
 #include "auth.h"
 #include "algo.h"
-#include "random.h"
+#include "dbrandom.h"
 
 runopts opts; /* GLOBAL */
 
 /* returns success or failure, and the keytype in *type. If we want
  * to restrict the type, type can contain a type to return */
-int readhostkey(const char * filename, sign_key * hostkey, int *type) {
+int readhostkey(const char * filename, sign_key * hostkey, 
+	enum signkey_type *type) {
 
 	int ret = DROPBEAR_FAILURE;
 	buffer *buf;
@@ -104,4 +105,9 @@ parse_ciphers_macs()
 	}
 }
 #endif
+
+void print_version() {
+	fprintf(stderr, "Dropbear v%s\n", DROPBEAR_VERSION);
+}
+
 

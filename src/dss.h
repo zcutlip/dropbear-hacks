@@ -22,15 +22,13 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE. */
 
-#ifndef _DSS_H_
-#define _DSS_H_
+#ifndef DROPBEAR_DSS_H_
+#define DROPBEAR_DSS_H_
 
 #include "includes.h"
 #include "buffer.h"
 
 #ifdef DROPBEAR_DSS 
-
-#define DSS_SIGNATURE_SIZE 4+SSH_SIGNKEY_DSS_LEN+4+2*SHA1_HASH_SIZE
 
 typedef struct {
 
@@ -43,11 +41,9 @@ typedef struct {
 
 } dropbear_dss_key;
 
-void buf_put_dss_sign(buffer* buf, dropbear_dss_key *key, const unsigned char* data,
-		unsigned int len);
+void buf_put_dss_sign(buffer* buf, dropbear_dss_key *key, buffer *data_buf);
 #ifdef DROPBEAR_SIGNKEY_VERIFY
-int buf_dss_verify(buffer* buf, dropbear_dss_key *key, const unsigned char* data,
-		unsigned int len);
+int buf_dss_verify(buffer* buf, dropbear_dss_key *key, buffer *data_buf);
 #endif
 int buf_get_dss_pub_key(buffer* buf, dropbear_dss_key *key);
 int buf_get_dss_priv_key(buffer* buf, dropbear_dss_key *key);
@@ -57,4 +53,4 @@ void dss_key_free(dropbear_dss_key *key);
 
 #endif /* DROPBEAR_DSS */
 
-#endif /* _DSS_H_ */
+#endif /* DROPBEAR_DSS_H_ */

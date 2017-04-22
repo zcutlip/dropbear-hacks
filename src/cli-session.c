@@ -31,18 +31,21 @@
 #include "packet.h"
 #include "tcpfwd.h"
 #include "channel.h"
-#include "random.h"
+#include "dbrandom.h"
 #include "service.h"
 #include "runopts.h"
 #include "chansession.h"
 #include "agentfwd.h"
+#include "crypto_desc.h"
+#include "netio.h"
 
-static void cli_remoteclosed();
-static void cli_sessionloop();
-static void cli_session_init();
-static void cli_finished();
+static void cli_remoteclosed(void) ATTRIB_NORETURN;
+static void cli_sessionloop(void);
+static void cli_session_init(pid_t proxy_cmd_pid);
+static void cli_finished(void) ATTRIB_NORETURN;
 static void recv_msg_service_accept(void);
 static void cli_session_cleanup(void);
+static void recv_msg_global_request_cli(void);
 
 struct clientsession cli_ses; /* GLOBAL */
 
@@ -67,9 +70,16 @@ static const packettype cli_packettypes[] = {
 	{SSH_MSG_CHANNEL_OPEN_FAILURE, recv_msg_channel_open_failure},
 	{SSH_MSG_USERAUTH_BANNER, recv_msg_userauth_banner}, /* client */
 	{SSH_MSG_USERAUTH_SPECIFIC_60, recv_msg_userauth_specific_60}, /* client */
+	{SSH_MSG_GLOBAL_REQUEST, recv_msg_global_request_cli},
+	{SSH_MSG_CHANNEL_SUCCESS, ignore_recv_response},
+	{SSH_MSG_CHANNEL_FAILURE, ignore_recv_response},
 #ifdef  ENABLE_CLI_REMOTETCPFWD
 	{SSH_MSG_REQUEST_SUCCESS, cli_recv_msg_request_success}, /* client */
 	{SSH_MSG_REQUEST_FAILURE, cli_recv_msg_request_failure}, /* client */
+#else
+	/* For keepalive */
+	{SSH_MSG_REQUEST_SUCCESS, ignore_recv_response},
+	{SSH_MSG_REQUEST_FAILURE, ignore_recv_response},
 #endif
 	{0, 0} /* End */
 };
@@ -84,24 +94,36 @@ static const struct ChanType *cli_chantypes[] = {
 	NULL /* Null termination */
 };
 
-void cli_session(int sock_in, int sock_out) {
+void cli_connected(int result, int sock, void* userdata, const char *errstring)
+{
+	struct sshsession *myses = userdata;
+	if (result == DROPBEAR_FAILURE) {
+		dropbear_exit("Connect failed: %s", errstring);
+	}
+	myses->sock_in = myses->sock_out = sock;
+	update_channel_prio();
+}
 
-	seedrandom();
-
-	crypto_init();
+void cli_session(int sock_in, int sock_out, struct dropbear_progress_connection *progress, pid_t proxy_cmd_pid) {
 
 	common_session_init(sock_in, sock_out);
+
+	if (progress) {
+		connect_set_writequeue(progress, &ses.writequeue);
+	}
 
 	chaninitialise(cli_chantypes);
 
 	/* Set up cli_ses vars */
-	cli_session_init();
+	cli_session_init(proxy_cmd_pid);
 
 	/* Ready to go */
 	sessinitdone = 1;
 
 	/* Exchange identification */
 	send_session_identification();
+
+	kexfirstinitialise(); /* initialise the kex state */
 
 	send_msg_kexinit();
 
@@ -117,7 +139,7 @@ static void cli_send_kex_first_guess() {
 }
 #endif
 
-static void cli_session_init() {
+static void cli_session_init(pid_t proxy_cmd_pid) {
 
 	cli_ses.state = STATE_NOTHING;
 	cli_ses.kex_state = KEX_NOTHING;
@@ -136,6 +158,8 @@ static void cli_session_init() {
 
 	cli_ses.retval = EXIT_SUCCESS; /* Assume it's clean if we don't get a
 									  specific exit status */
+	cli_ses.proxy_cmd_pid = proxy_cmd_pid;
+	TRACE(("proxy command PID='%d'", proxy_cmd_pid));
 
 	/* Auth */
 	cli_ses.lastprivkey = NULL;
@@ -178,7 +202,7 @@ static void send_msg_service_request(char* servicename) {
 }
 
 static void recv_msg_service_accept(void) {
-	// do nothing, if it failed then the server MUST have disconnected
+	/* do nothing, if it failed then the server MUST have disconnected */
 }
 
 /* This function drives the progress of the session - it initiates KEX,
@@ -231,6 +255,10 @@ static void cli_sessionloop() {
 			cli_ses.state = USERAUTH_REQ_SENT;
 			TRACE(("leave cli_sessionloop: sent userauth methods req"))
 			return;
+
+		case USERAUTH_REQ_SENT:
+			TRACE(("leave cli_sessionloop: waiting, req_sent"))
+			return;
 			
 		case USERAUTH_FAIL_RCVD:
 			if (cli_auth_try() == DROPBEAR_FAILURE) {
@@ -241,6 +269,11 @@ static void cli_sessionloop() {
 			return;
 
 		case USERAUTH_SUCCESS_RCVD:
+#ifndef DISABLE_SYSLOG
+			if (opts.usingsyslog) {
+				dropbear_log(LOG_INFO, "Authentication succeeded.");
+			}
+#endif
 
 #ifdef DROPBEAR_NONE_CIPHER
 			if (cli_ses.cipher_none_after_auth)
@@ -307,17 +340,31 @@ static void cli_sessionloop() {
 
 }
 
+void kill_proxy_command(void) {
+	/*
+	 * Send SIGHUP to proxy command if used. We don't wait() in
+	 * case it hangs and instead rely on init to reap the child
+	 */
+	if (cli_ses.proxy_cmd_pid > 1) {
+		TRACE(("killing proxy command with PID='%d'", cli_ses.proxy_cmd_pid));
+		kill(cli_ses.proxy_cmd_pid, SIGHUP);
+	}
+}
+
 static void cli_session_cleanup(void) {
 
 	if (!sessinitdone) {
 		return;
 	}
 
+	kill_proxy_command();
+
 	/* Set std{in,out,err} back to non-blocking - busybox ash dies nastily if
 	 * we don't revert the flags */
-	fcntl(cli_ses.stdincopy, F_SETFL, cli_ses.stdinflags);
-	fcntl(cli_ses.stdoutcopy, F_SETFL, cli_ses.stdoutflags);
-	fcntl(cli_ses.stderrcopy, F_SETFL, cli_ses.stderrflags);
+	/* Ignore return value since there's nothing we can do */
+	(void)fcntl(cli_ses.stdincopy, F_SETFL, cli_ses.stdinflags);
+	(void)fcntl(cli_ses.stdoutcopy, F_SETFL, cli_ses.stdoutflags);
+	(void)fcntl(cli_ses.stderrcopy, F_SETFL, cli_ses.stderrflags);
 
 	cli_tty_cleanup();
 
@@ -347,10 +394,10 @@ static void cli_remoteclosed() {
 /* Operates in-place turning dirty (untrusted potentially containing control
  * characters) text into clean text. 
  * Note: this is safe only with ascii - other charsets could have problems. */
-void cleantext(unsigned char* dirtytext) {
+void cleantext(char* dirtytext) {
 
 	unsigned int i, j;
-	unsigned char c;
+	char c;
 
 	j = 0;
 	for (i = 0; dirtytext[i] != '\0'; i++) {
@@ -364,4 +411,10 @@ void cleantext(unsigned char* dirtytext) {
 	}
 	/* Null terminate */
 	dirtytext[j] = '\0';
+}
+
+static void recv_msg_global_request_cli(void) {
+	TRACE(("recv_msg_global_request_cli"))
+	/* Send a proper rejection */
+	send_msg_request_failure();
 }

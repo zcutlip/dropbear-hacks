@@ -30,6 +30,7 @@
 #include "buffer.h"
 #include "packet.h"
 #include "listener.h"
+#include "listener.h"
 #include "runopts.h"
 
 #ifdef DROPBEAR_TCP_ACCEPT
@@ -42,6 +43,13 @@ static void cleanup_tcp(struct Listener *listener) {
 	m_free(tcpinfo->listenaddr);
 	m_free(tcpinfo->request_listenaddr);
 	m_free(tcpinfo);
+}
+
+int tcp_prio_inithandler(struct Channel* channel)
+{
+	TRACE(("tcp_prio_inithandler channel %d", channel->index))
+	channel->prio = DROPBEAR_CHANNEL_PRIO_UNKNOWABLE;
+	return 0;
 }
 
 static void tcp_acceptor(struct Listener *listener, int sock) {
@@ -67,7 +75,7 @@ static void tcp_acceptor(struct Listener *listener, int sock) {
 	}
 
 	if (send_msg_channel_open_init(fd, tcpinfo->chantype) == DROPBEAR_SUCCESS) {
-		unsigned char* addr = NULL;
+		char* addr = NULL;
 		unsigned int port = 0;
 
 		if (tcpinfo->tcp_type == direct) {
@@ -113,7 +121,7 @@ int listen_tcpfwd(struct TCPListener* tcpinfo) {
 	TRACE(("enter listen_tcpfwd"))
 
 	/* first we try to bind, so don't need to do so much cleanup on failure */
-	snprintf(portstring, sizeof(portstring), "%d", tcpinfo->listenport);
+	snprintf(portstring, sizeof(portstring), "%u", tcpinfo->listenport);
 
 	nsocks = dropbear_listen(tcpinfo->listenaddr, portstring, socks, 
 			DROPBEAR_MAX_SOCKS, &errstring, &ses.maxfd);

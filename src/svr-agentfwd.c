@@ -37,7 +37,7 @@
 #include "channel.h"
 #include "packet.h"
 #include "buffer.h"
-#include "random.h"
+#include "dbrandom.h"
 #include "listener.h"
 #include "auth.h"
 
@@ -117,7 +117,7 @@ static void agentaccept(struct Listener *UNUSED(listener), int sock) {
 }
 
 /* set up the environment variable pointing to the socket. This is called
- * just before command/shell execution, after dropping priveleges */
+ * just before command/shell execution, after dropping privileges */
 void svr_agentset(struct ChanSess * chansess) {
 
 	char *path = NULL;
