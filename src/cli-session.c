@@ -96,10 +96,12 @@ static const struct ChanType *cli_chantypes[] = {
 
 void cli_connected(int result, int sock, void* userdata, const char *errstring)
 {
+	//myses is the global ses
 	struct sshsession *myses = userdata;
 	if (result == DROPBEAR_FAILURE) {
 		dropbear_exit("Connect failed: %s", errstring);
 	}
+	//global ses.sock_in and ses.sock_out now = the client connection to the server
 	myses->sock_in = myses->sock_out = sock;
 	update_channel_prio();
 }
@@ -121,12 +123,14 @@ void cli_session(int sock_in, int sock_out, struct dropbear_progress_connection 
 	sessinitdone = 1;
 
 	/* Exchange identification */
+	//This is confusing. We're not actually sending identification
+	//We're just queing up the session id string to send later.
 	send_session_identification();
 
 	kexfirstinitialise(); /* initialise the kex state */
-
+	//ZJC: again, I don't think we're actually sending anything here. just initializing the kex message.
 	send_msg_kexinit();
-
+    //ZJC: this is where, we actually connect to the server, and then do the sessions reading/writing loop.
 	session_loop(cli_sessionloop);
 
 	/* Not reached */
