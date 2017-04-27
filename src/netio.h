@@ -23,6 +23,11 @@ int dropbear_listen(const char* address, const char* port,
 
 struct dropbear_progress_connection;
 
+#ifdef CLI_REVERSE_CONNECT
+void db_progress_set_sock(struct dropbear_progress_connection *c,int sock);
+#endif /* CLI_REVERSE_CONNECT */
+	
+
 /* result is DROPBEAR_SUCCESS or DROPBEAR_FAILURE.
 errstring is only set on DROPBEAR_FAILURE, returns failure message for the last attempted socket */
 typedef void(*connect_callback)(int result, int sock, void* data, const char* errstring);

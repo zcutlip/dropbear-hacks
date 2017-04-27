@@ -419,6 +419,9 @@ void cli_getopts(int argc, char ** argv) {
 	if (cli_opts.remoteport == NULL) {
 		cli_opts.remoteport = "22";
 	}
+#ifdef CLI_REVERSE_CONNECT
+    cli_opts.local_port=cli_opts.remoteport;
+#endif
 
 	/* If not explicitly specified with -t or -T, we don't want a pty if
 	 * there's a command, but we do otherwise */
