@@ -35,6 +35,8 @@ DBCLIENT=dbclient
 
 DB_SERVER_STAMP=.db_server
 DB_CLIENT_STAMP=.db_client
+CONFIG_CLI_STAMP=.config_cli_stamp
+CONFIG_SVR_STAMP=.config_svr_stamp
 
 CONFIG_OPTIONS=--disable-syslog --disable-zlib --disable-pam --disable-shadow
 
@@ -48,41 +50,53 @@ server:$(DB_SERVER_STAMP)
 db_clean:
 	-make -C src clean
 
-$(DB_SERVER_STAMP): src/$(DROPBEAR)
+$(DB_SERVER_STAMP): $(CONFIG_CLI_STAMP) src/$(DROPBEAR)
 	cp src/$(DROPBEAR) .
 	touch $@
 	$(STRIP) $(DROPBEAR)
 
-$(DB_CLIENT_STAMP): src/$(SCP) src/$(DBCLIENT)
-	cp $^ .
+$(DB_CLIENT_STAMP): $(CONFIG_CLI_STAMP) src/$(SCP) src/$(DBCLIENT)
+	cp $ src/$(SCP) src/$(DBCLIENT) .
 	touch $@
 	$(STRIP) $(SCP)
 
 
-src/$(SCP) src/$(DBCLIENT):
-	#-make -C src clean
+$(CONFIG_CLI_STAMP):
+	-make -C src clean
 	@echo $(PATH)
 	OLDPWD=$(PWD)
 	cd src && \
-	./configure --verbose LDFLAGS="" $(CONFIG_OPTIONS) --host=$(HOST) \
-	CFLAGS="$(CLI_CFLAGS)" && \
-	make PROGRAMS="dbclient scp"
+	./configure --verbose LDFLAGS="" $(CONFIG_OPTIONS) --host=$(HOST) CFLAGS="$(CLI_CFLAGS)"
+	touch *.c
+	touch *.h
 	cd $(OLDPWD)
+	touch $@
+
+$(CONFIG_SVR_STAMP):
+	-make -C src clean
+	@echo $(PATH)
+	OLDPWD=$(PWD)
+	cd src && \
+	./configure --verbose LDFLAGS="" $(CONFIG_OPTIONS) --host=$(HOST) CFLAGS="$(SVR_CFLAGS)"
+	touch *.c
+	touch *.h
+	cd $(OLDPWD)
+	touch $@
+
+src/$(SCP) src/$(DBCLIENT):
+	#-make -C src clean
+	make -C src PROGRAMS="dbclient scp"
 	
 
 src/$(DROPBEAR):
 	#-make -C src clean
-	@echo $(PATH)
-	OLDPWD=$(PWD)
-	cd src && \
-	./configure --verbose LDFLAGS="" $(CONFIG_OPTIONS) --host=$(HOST) \
-	CFLAGS="$(SVR_CFLAGS)" && \
-	make PROGRAMS="dropbear"
-	cd $(OLDPWD)
+	make -C src PROGRAMS="dropbear dbclient"
+
 
 clean:
 	-rm -f $(DB_SERVER_STAMP) $(DB_CLIENT_STAMP)
 	-rm $(DROPBEAR)
 	-rm $(SCP)
+	-rm $(DBCLIENT)
 	make -C src distclean
 
