@@ -27,7 +27,6 @@ ifeq ($(REVERSE_CONNECT),1)
 	SVR_CFLAGS += -DSVR_REVERSE_CONNECT
 endif
 
-
 ifeq ($(BUILDSTATIC),1)
 	LDFLAGS+="-static"
 endif
@@ -55,7 +54,6 @@ server:$(DB_SERVER_STAMP)
 
 db_clean:
 	-make -C src clean
-
 
 $(DB_SERVER_STAMP): $(CONFIG_SVR_STAMP) src/$(DROPBEAR)
 	cp src/$(DROPBEAR) .
