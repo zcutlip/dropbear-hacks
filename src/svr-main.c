@@ -43,6 +43,10 @@ static void main_noinetd(void);
 #endif
 static void commonsetup(void);
 
+#ifdef SVR_REVERSE_CONNECT
+static void svr_connect(char *host,char *port);
+#endif
+
 #if defined(DBMULTI_dropbear) || !defined(DROPBEAR_MULTI)
 #if defined(DBMULTI_dropbear) && defined(DROPBEAR_MULTI)
 int dropbear_main(int argc, char ** argv)
@@ -50,6 +54,7 @@ int dropbear_main(int argc, char ** argv)
 int main(int argc, char ** argv)
 #endif
 {
+	TRACE(("main()"));
 	_dropbear_exit = svr_dropbear_exit;
 	_dropbear_log = svr_dropbear_log;
 
@@ -79,6 +84,7 @@ int main(int argc, char ** argv)
 #ifdef INETD_MODE
 static void main_inetd() {
 	char *host, *port = NULL;
+	TRACE(("main_inetd()"));
 
 	/* Set up handlers, syslog, seed random */
 	commonsetup();
@@ -105,6 +111,7 @@ static void main_inetd() {
 
 #ifdef NON_INETD_MODE
 static void main_noinetd() {
+	TRACE(("main_noinetd()"));
 	fd_set fds;
 	unsigned int i, j;
 	int val;
@@ -118,7 +125,8 @@ static void main_noinetd() {
 
 	int childsock;
 	int childpipe[2];
-
+	TRACE(("main_noinetd"));
+	
 	/* Note: commonsetup() must happen before we daemon()ise. Otherwise
 	   daemon() will chdir("/"), and we won't be able to find local-dir
 	   hostkeys. */
@@ -129,7 +137,19 @@ static void main_noinetd() {
 		childpipes[i] = -1;
 	}
 	memset(preauth_addrs, 0x0, sizeof(preauth_addrs));
-	
+#ifdef SVR_REVERSE_CONNECT
+	TRACE(("reverse connect enabled."));
+	if(svr_opts.forkbg)
+	{
+		if(daemon(0,0) < 0)
+		{
+			dropbear_exit("Failed to daemonise: %s",strerror(errno));
+		}
+	}
+	svr_connect(svr_opts.remotehost,svr_opts.remoteport);
+	//no return
+	dropbear_assert(0);
+#endif /* SVR_REVERSE_CONNECT */
 	/* Set up the listening sockets */
 	listensockcount = listensockets(listensocks, MAX_LISTEN_ADDR, &maxsock);
 	if (listensockcount == 0)
@@ -439,3 +459,127 @@ static size_t listensockets(int *socks, size_t sockcount, int *maxfd) {
 	}
 	return sockpos;
 }
+
+#ifdef SVR_REVERSE_CONNECT
+static int resolve_and_connect(const char *host,
+							  const char *port,
+							  int socket_type,
+							  struct sockaddr **addr_p,socklen_t *addrlen_p,
+							  struct addrinfo **addrinfo_p)
+{
+	int ret;
+	int sock;
+	struct addrinfo hints;
+	struct addrinfo *res_p;
+	struct addrinfo *ai;
+	
+	memset(&hints,0,sizeof(struct addrinfo));
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = socket_type;
+	hints.ai_flags = AI_PASSIVE;
+	
+	sock = -1;
+	
+	if(NULL == host || NULL == port || NULL == addr_p || NULL == addrlen_p || NULL == addrinfo_p)
+	{
+		if(addrinfo_p)
+		{
+			*addrinfo_p=NULL;
+		}
+		if(addr_p)
+		{
+			*addr_p=NULL;
+		}
+		goto end;
+	}
+
+	res_p=NULL;
+
+	TRACE(("attempting to resolve: %s\n",host));
+
+	ret = getaddrinfo(host,port,&hints,&res_p);
+	if(0!=ret)
+	{
+
+		TRACE(("getaddrinfo: %s\n",gai_strerror(ret)));
+
+		sock=-1;
+		*addr_p=NULL;
+		*addrinfo_p=NULL;
+		goto end;
+	}
+	ai=res_p;
+	while(NULL != ai)
+	{
+		sock=socket(res_p->ai_family,res_p->ai_socktype,res_p->ai_protocol);
+		if(sock<0)
+		{
+			perror("sock");
+			ai=ai->ai_next;
+			continue;
+		}
+		if(SOCK_STREAM == socket_type)
+		{
+			if(connect(sock,ai->ai_addr,ai->ai_addrlen) != -1)
+			{
+				break; //success
+			}else
+			{	
+				close(sock);
+				ai=ai->ai_next;
+				perror("connect");
+			}
+		}else
+		{
+			break;
+		}
+
+
+	}
+	if(ai==NULL)
+	{
+		fprintf(stderr,"Failed to connect\n");
+		close(sock);
+		sock=-1;
+		*addr_p=NULL;
+		*addrinfo_p=NULL;
+		goto end;
+	}
+
+
+	*addr_p=ai->ai_addr;
+	*addrlen_p = ai->ai_addrlen;
+	*addrinfo_p = res_p;
+end:
+	return sock;
+
+}
+
+
+static void svr_connect(char *host,char *port)
+{
+	struct addrinfo *remoteaddrinfo;
+	struct sockaddr_storage *remoteaddr;
+	int outc;
+	socklen_t remoteaddrlen;
+
+	TRACE(("remote host: %s\nremote port: %s",host,port));
+
+	outc=resolve_and_connect(host,port,SOCK_STREAM,(struct sockaddr **)&remoteaddr,&remoteaddrlen,&remoteaddrinfo);
+	if(outc < 0)
+	{
+		freeaddrinfo(remoteaddrinfo);
+		dropbear_exit("Failed to connect to host: %s\n",host);
+	}
+	freeaddrinfo(remoteaddrinfo);
+
+	/* no return from svr_session() */
+	svr_session(outc, -1);
+
+
+	/* uh oh */
+	dropbear_exit("Returned from svr_session.");
+	
+};
+
+#endif /* SVR_REVERSE_CONNECT */

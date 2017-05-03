@@ -217,7 +217,7 @@ If you test it please contact the Dropbear author */
 #define ENABLE_SVR_PASSWORD_AUTH
 #endif
 /* PAM requires ./configure --enable-pam */
-/*#define ENABLE_SVR_PAM_AUTH */
+/* #define ENABLE_SVR_PAM_AUTH */
 #define ENABLE_SVR_PUBKEY_AUTH
 
 /* Whether to take public key options in 

@@ -21,6 +21,16 @@ struct dropbear_progress_connection {
 	char* errstring;
 };
 
+#ifdef CLI_REVERSE_CONNECT
+void db_progress_set_sock(struct dropbear_progress_connection *c, int sock )
+{
+	if(c)
+	{
+		c->sock=sock;
+	}
+}
+#endif /*CLI_REVERSE_CONNECT */
+
 /* Deallocate a progress connection. Removes from the pending list if iter!=NULL.
 Does not close sockets */
 static void remove_connect(struct dropbear_progress_connection *c, m_list_elem *iter) {
