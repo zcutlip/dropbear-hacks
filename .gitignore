@@ -1,3 +1,10 @@
 *.o
 *.a
 tmtags*
+*/libtomcrypt/Makefile
+*/libtommath/Makefile
+src/Makefile
+config.log
+config.status
+*.orig
+.DS_Store
