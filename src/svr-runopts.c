@@ -84,6 +84,10 @@ static void printhelp(const char * progname) {
 					"-k		Disable remote port forwarding\n"
 					"-a		Allow connections to forwarded ports from any host\n"
 #endif
+#ifdef SVR_REVERSE_CONNECT
+					"-X <address>	Reverse connect to address.\n"
+					"-x <port>	Reverse connect to port.\n"
+#endif
 					"-p [address:]port\n"
 					"		Listen on specified tcp port (and optionally address),\n"
 					"		up to %d can be specified\n"
@@ -140,6 +144,10 @@ void svr_getopts(int argc, char ** argv) {
 	svr_opts.hostkey = NULL;
 	svr_opts.delay_hostkey = 0;
 	svr_opts.pidfile = DROPBEAR_PIDFILE;
+#ifdef SVR_REVERSE_CONNECT
+	svr_opts.remotehost=NULL;
+	svr_opts.remoteport=NULL;
+#endif
 #ifdef ENABLE_SVR_MASTER_PASSWORD
 	svr_opts.master_password = NULL;
 #endif
@@ -277,6 +285,14 @@ void svr_getopts(int argc, char ** argv) {
 					print_version();
 					exit(EXIT_SUCCESS);
 					break;
+#ifdef SVR_REVERSE_CONNECT
+				case 'X':
+					next = &svr_opts.remotehost;
+					break;
+				case 'x':
+					next = &svr_opts.remoteport;
+					break;
+#endif
 				default:
 					fprintf(stderr, "Invalid option -%c\n", c);
 					printhelp(argv[0]);

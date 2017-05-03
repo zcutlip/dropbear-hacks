@@ -117,7 +117,10 @@ typedef struct svr_runopts {
 
 	buffer * banner;
 	char * pidfile;
-
+#ifdef SVR_REVERSE_CONNECT
+	char * remotehost;
+	char * remoteport;
+#endif
 } svr_runopts;
 
 extern svr_runopts svr_opts;
