@@ -59,7 +59,7 @@ void common_session_init(int sock_in, int sock_out) {
 #endif
 
 	TRACE(("enter session_init"))
-		//ZJC: sock_in and sock_out are now stored in global ses
+
 	ses.sock_in = sock_in;
 	ses.sock_out = sock_out;
 	ses.maxfd = MAX(sock_in, sock_out);
@@ -166,9 +166,8 @@ void session_loop(void(*loophandler)()) {
 
 		/* set up for channels which can be read/written */
 		setchannelfds(&readfd, &writefd, writequeue_has_space);
-		
+
 		/* Pending connections to test */
-		//ZJC: if we're a client and we haven't connected to the server yet, it happens here
 		set_connect_fds(&writefd);
 
 		/* We delay reading from the input socket during initial setup until

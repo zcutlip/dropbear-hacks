@@ -29,7 +29,7 @@ void db_progress_set_sock(struct dropbear_progress_connection *c, int sock )
 		c->sock=sock;
 	}
 }
-#endif CLI_REVERSE_CONNECT
+#endif /*CLI_REVERSE_CONNECT */
 
 /* Deallocate a progress connection. Removes from the pending list if iter!=NULL.
 Does not close sockets */
@@ -190,8 +190,6 @@ void set_connect_fds(fd_set *writefd) {
 		m_list_elem *next_iter = iter->next;
 		struct dropbear_progress_connection *c = iter->item;
 		/* Set one going */
-		//ZJC: we can probably have already accepted() the 
-		//reverse connection before now. Looks safe.
 		while (c->res_iter && c->sock < 0) {
 			connect_try_next(c);
 		}
@@ -238,9 +236,6 @@ void handle_connect_fds(fd_set *writefd) {
 			c->errstring = m_strdup(strerror(val));
 		} else {
 			/* New connection has been established */
-			//ZJC: if this is the client, then we're about to call cli_connected()
-			//At that point we set ses.sock_in=ses.sock_out=c->sock
-			//c->cb_data is really a pointer to the ses global
 			c->cb(DROPBEAR_SUCCESS, c->sock, c->cb_data, NULL);
 			remove_connect(c, iter);
 			TRACE(("leave handle_connect_fds - success"))

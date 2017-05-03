@@ -92,17 +92,10 @@ int main(int argc, char ** argv) {
 	} else
 #endif
 	{
-		//here, a dropbear_progress_connection, often called 'c'
-		//is created. c->sock is initialized to -1, and is the client socket
-		//that gets passed later to connect()
-		//c->cb is the callback and gets set to cli_connected()
-		//c->cb_data, referred to as userdata in cli_connected() gets set to the global &ses
-		//Also, at this point the progress struct containing our client socket has been added to 
-		//the ses.conn_pending linked list and should be ses.conn_pending.first->item, which
-		//is referenced by set_connect_fds().
 		progress = connect_remote(cli_opts.remotehost, cli_opts.remoteport, cli_connected, &ses);
 		sock_in = sock_out = -1;
 	}
+
 #ifdef CLI_REVERSE_CONNECT
 	TRACE(("REVERSE_CONNECT defined so doing accept."));
 	dbsock = cli_accept_remote(cli_opts.local_port,&error);
@@ -112,8 +105,7 @@ int main(int argc, char ** argv) {
 	}
 	db_progress_set_sock(progress,dbsock);
 #endif /* CLI_REVERSE_CONNECT */
-	//I think it is safe at any time before set_connect_fds() gets called to do the client accept()
-	//We might be able to do it here.
+
 	cli_session(sock_in, sock_out, progress, proxy_cmd_pid);
 
 	/* not reached */
